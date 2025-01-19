@@ -1,4 +1,5 @@
 # Minimalistic DEFLATE Rust Library
+![Rust Workflow](https://github.com/steschu77/miniz-rs/actions/workflows/ci.yml/badge.svg)
 
 MiniZ-rs is a minimalistic (de-)compression library that provides support for decoding DEFLATE compressed data.
 
