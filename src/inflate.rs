@@ -57,7 +57,8 @@ struct VarLenCode {
 type LookupTable = [VarLenCode; 512 + 512];
 
 // ------------------------------------------------------------------------
-fn generate_codes(table: &mut [VarLenCode]) {
+#[allow(clippy::comparison_chain)]
+fn generate_codes(table: &mut [VarLenCode]) -> std::result::Result<(), Error> {
     const MAX_CODE_LENGTH: usize = 16;
 
     // count number of instances of each code length
@@ -66,10 +67,24 @@ fn generate_codes(table: &mut [VarLenCode]) {
         code_len_count[code.len as usize] += 1;
     }
 
-    // calculate next code for each code length
+    // calculate next code for each code length & monitor for over- or under-subscription
     let mut next_code = [0; MAX_CODE_LENGTH];
+    let mut available_codes: i32 = 1;
+    let mut max_len = 0;
     for i in 1..MAX_CODE_LENGTH {
+        available_codes = (available_codes << 1) - code_len_count[i] as i32;
+        max_len = if code_len_count[i] != 0 { i } else { max_len };
         next_code[i] = (next_code[i - 1] + code_len_count[i - 1]) << 1;
+    }
+
+    if available_codes != 0 && max_len > 1 {
+        // For a proper Huffman tree, the sum of all code lengths should match the total number of
+        // leaves (symbols) in the binary tree (available_codes == 0).
+        return if available_codes < 0 {
+            Err(Error::OverSubscribedTree)
+        } else {
+            Err(Error::UnderSubscribedTree)
+        };
     }
 
     for code in table.iter_mut() {
@@ -80,6 +95,8 @@ fn generate_codes(table: &mut [VarLenCode]) {
             next_code[len] += 1;
         }
     }
+
+    Ok(())
 }
 
 // ------------------------------------------------------------------------
@@ -87,7 +104,7 @@ fn make_lookup_table(inp: &mut [VarLenCode]) -> std::result::Result<LookupTable,
     const HEADSIZE: usize = 1 << FIRSTBITS; // size of the first table
     const MASK: u16 = (1 << FIRSTBITS) - 1;
 
-    generate_codes(inp);
+    generate_codes(inp)?;
 
     // compute maxlens: max total bit length of symbols sharing prefix in the first table
     let mut maxlens = [0; HEADSIZE];
@@ -101,14 +118,6 @@ fn make_lookup_table(inp: &mut [VarLenCode]) -> std::result::Result<LookupTable,
         // get the FIRSTBITS MSBs, the MSBs of the symbol are encoded first.
         let index = (code.code & MASK) as usize;
         maxlens[index] = maxlens[index].max(l);
-    }
-
-    // compute total table size: size of first table plus all secondary tables for symbols longer than FIRSTBITS
-    let mut size = HEADSIZE;
-    for l in maxlens.iter() {
-        if *l > FIRSTBITS {
-            size += 1 << (*l - FIRSTBITS);
-        }
     }
 
     // initialize with an invalid length to indicate unused entries
@@ -145,9 +154,6 @@ fn make_lookup_table(inp: &mut [VarLenCode]) -> std::result::Result<LookupTable,
             for j in 0..num {
                 // bit reader will read the l bits of symbol first, the remaining FIRSTBITS - l bits go to the MSB's
                 let index = (code.code | (j << l)) as usize;
-                if table[index].len != 16 {
-                    return Err(Error::OverSubscribedTree);
-                }
                 table[index].len = l;
                 table[index].code = i as u16;
             }
@@ -162,11 +168,6 @@ fn make_lookup_table(inp: &mut [VarLenCode]) -> std::result::Result<LookupTable,
 
             // amount of entries of this symbol in secondary table
             let num = 1 << (tablelen - (l - FIRSTBITS));
-
-            if maxlen < l {
-                // invalid tree: long symbol shares prefix with short symbol
-                return Err(Error::OverSubscribedTree);
-            }
 
             for j in 0..num {
                 let reverse2 = code.code >> FIRSTBITS; // l - FIRSTBITS bits
@@ -188,16 +189,6 @@ fn make_lookup_table(inp: &mut [VarLenCode]) -> std::result::Result<LookupTable,
             if item.len == 16 {
                 item.len = 1;
                 item.code = INVALIDSYMBOL;
-            }
-        }
-    } else {
-        // A good Huffman tree has N * 2 - 1 nodes, of which N - 1 are internal nodes.
-        // If that is not the case (due to too long length codes), the table will not
-        // have been fully used, and this is an error (not all bit combinations can be
-        // decoded): an undersubscribed Huffman tree
-        for item in table.iter().take(size) {
-            if item.len == 16 {
-                return Err(Error::UnderSubscribedTree);
             }
         }
     }
