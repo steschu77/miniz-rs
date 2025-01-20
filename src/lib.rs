@@ -8,11 +8,11 @@ pub enum Error {
     InvalidBitstream,
     InvalidBlockType,
     InvalidBlockLength,
+    InvalidCodeLength,
     InvalidDistance,
     InvalidLength,
     InvalidSymbol,
     InvalidData,
-    InvalidCodeLength,
     UnderSubscribedTree,
     OverSubscribedTree,
 }
