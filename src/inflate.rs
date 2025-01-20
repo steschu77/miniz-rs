@@ -44,8 +44,7 @@ fn reverse_bits(x: u16, count: usize) -> u16 {
 }
 
 // ----------------------------------------------------------------------------
-const FIRSTBITS: u8 = 9;
-const INVALIDSYMBOL: u16 = 32767;
+const TABLE_BITS: u8 = 9;
 
 // ----------------------------------------------------------------------------
 #[derive(Copy, Clone)]
@@ -58,138 +57,117 @@ type LookupTable = [VarLenCode; 512 + 512];
 
 // ------------------------------------------------------------------------
 #[allow(clippy::comparison_chain)]
-fn generate_codes(table: &mut [VarLenCode]) -> std::result::Result<(), Error> {
+fn generate_codes(codes: &mut [u16], lengths: &[u8]) -> std::result::Result<bool, Error> {
     const MAX_CODE_LENGTH: usize = 16;
 
     // count number of instances of each code length
     let mut code_len_count = [0; MAX_CODE_LENGTH];
-    for code in table.iter() {
-        code_len_count[code.len as usize] += 1;
+    for len in lengths.iter() {
+        code_len_count[*len as usize] += 1;
     }
 
     // calculate next code for each code length & monitor for over- or under-subscription
     let mut next_code = [0; MAX_CODE_LENGTH];
     let mut available_codes: i32 = 1;
-    let mut max_len = 0;
     for i in 1..MAX_CODE_LENGTH {
         available_codes = (available_codes << 1) - code_len_count[i] as i32;
-        max_len = if code_len_count[i] != 0 { i } else { max_len };
         next_code[i] = (next_code[i - 1] + code_len_count[i - 1]) << 1;
     }
 
-    if available_codes != 0 && max_len > 1 {
+    if available_codes != 0 {
         // For a proper Huffman tree, the sum of all code lengths should match the total number of
         // leaves (symbols) in the binary tree (available_codes == 0).
-        return if available_codes < 0 {
+        return if available_codes == 0x8000 || available_codes == 0x4000 {
+            // trivial under-subscriptions: only a single symbol, or no symbols at all
+            Ok(false)
+        } else if available_codes < 0 {
             Err(Error::OverSubscribedTree)
         } else {
             Err(Error::UnderSubscribedTree)
         };
     }
 
-    for code in table.iter_mut() {
-        if code.len != 0 {
-            let len = code.len as usize;
+    for (len, code) in lengths.iter().zip(codes.iter_mut()) {
+        if *len != 0 {
+            let len = *len as usize;
             // Huffman bits are given in MSB first order but the bit reader reads LSB first
-            code.code = reverse_bits(next_code[len], len);
+            *code = reverse_bits(next_code[len], len);
             next_code[len] += 1;
         }
     }
 
-    Ok(())
+    Ok(true)
 }
 
 // ------------------------------------------------------------------------
-fn make_lookup_table(inp: &mut [VarLenCode]) -> std::result::Result<LookupTable, Error> {
-    const HEADSIZE: usize = 1 << FIRSTBITS; // size of the first table
-    const MASK: u16 = (1 << FIRSTBITS) - 1;
+fn fill_table(table: &mut [VarLenCode], num: usize, offset: usize, len: u8, code: u16) {
+    for j in 0..num {
+        let index = offset + (j << len);
+        table[index] = VarLenCode { code, len };
+    }
+}
 
-    generate_codes(inp)?;
+// ------------------------------------------------------------------------
+fn make_lookup_table(lengths: &[u8]) -> std::result::Result<LookupTable, Error> {
+    const TABLE_SIZE: usize = 1 << TABLE_BITS; // size of the first table
+    const TABLE_MASK: u16 = (1 << TABLE_BITS) - 1;
+    let mut table = [VarLenCode { code: 0, len: 1 }; 1024];
+
+    let mut codes = vec![0; lengths.len()];
+    if !generate_codes(&mut codes, lengths)? {
+        // no codes generated for trivial cases
+        return Ok(table);
+    }
 
     // compute maxlens: max total bit length of symbols sharing prefix in the first table
-    let mut maxlens = [0; HEADSIZE];
-    for code in inp.iter() {
-        let l = code.len;
-        if l <= FIRSTBITS {
+    let mut maxlens = [0; TABLE_SIZE];
+    for (len, code) in lengths.iter().zip(codes.iter_mut()) {
+        if *len <= TABLE_BITS {
             // symbols that fit in first table don't increase secondary table size
             continue;
         }
 
         // get the FIRSTBITS MSBs, the MSBs of the symbol are encoded first.
-        let index = (code.code & MASK) as usize;
-        maxlens[index] = maxlens[index].max(l);
+        let index = (*code & TABLE_MASK) as usize;
+        maxlens[index] = maxlens[index].max(*len);
     }
 
-    // initialize with an invalid length to indicate unused entries
-    let mut table = [VarLenCode { code: 0, len: 16 }; 1024];
-
     // fill in the first table for long symbols: max prefix size and pointer to secondary tables
-    let mut pointer = HEADSIZE;
-    for i in 0..HEADSIZE {
+    let mut pointer = TABLE_SIZE;
+    for i in 0..TABLE_SIZE {
         let l = maxlens[i];
-        if l <= FIRSTBITS {
+        if l <= TABLE_BITS {
             continue;
         }
         table[i].len = l;
         table[i].code = pointer as u16;
 
-        let scondary_table_size = 1 << (l - FIRSTBITS);
+        let scondary_table_size = 1 << (l - TABLE_BITS);
         pointer += scondary_table_size;
     }
 
     // fill in the first table for short symbols, or secondary table for long symbols
-    let mut numpresent = 0;
-    for (code, i) in inp.iter().zip(0..) {
-        let l = code.len;
-        if l == 0 {
+    for (i, (len, code)) in lengths.iter().zip(codes.iter_mut()).enumerate() {
+        if *len == 0 {
             continue;
         }
 
-        numpresent += 1;
-
-        if l <= FIRSTBITS {
+        if *len <= TABLE_BITS {
             // short symbol, fully in first table, replicated num times if l < FIRSTBITS
-            let num = 1 << (FIRSTBITS - l);
-
-            for j in 0..num {
-                // bit reader will read the l bits of symbol first, the remaining FIRSTBITS - l bits go to the MSB's
-                let index = (code.code | (j << l)) as usize;
-                table[index].len = l;
-                table[index].code = i as u16;
-            }
+            let num = 1usize << (TABLE_BITS - *len);
+            fill_table(&mut table, num, *code as usize, *len, i as u16);
         } else {
             // long symbol, shares prefix with other long symbols in first lookup table, needs second lookup
             // the FIRSTBITS MSBs of the symbol are the first table index
-            let index = (code.code & MASK) as usize;
+            let index = (*code & TABLE_MASK) as usize;
             let maxlen = table[index].len;
-            // log2 of secondary table length, should be >= l - FIRSTBITS
-            let tablelen = maxlen - FIRSTBITS;
-            let start = table[index].code as usize;
 
             // amount of entries of this symbol in secondary table
-            let num = 1 << (tablelen - (l - FIRSTBITS));
-
-            for j in 0..num {
-                let reverse2 = code.code >> FIRSTBITS; // l - FIRSTBITS bits
-                let index2 = start + (reverse2 | (j << (l - FIRSTBITS))) as usize;
-                table[index2].len = l;
-                table[index2].code = i as u16;
-            }
-        }
-    }
-
-    if numpresent < 2 {
-        // In case of exactly 1 symbol, in theory the Huffman symbol needs 0 bits,
-        // but deflate uses 1 bit instead. In case of 0 symbols, no symbols can
-        // appear at all, but such Huffman tree could still exist (e.g. if distance
-        // codes are never used). In both cases, not all symbols of the table will be
-        // filled in. Fill them in with an invalid symbol value so returning them from
-        // read_symbol will cause an error.
-        for item in table.iter_mut().take(HEADSIZE) {
-            if item.len == 16 {
-                item.len = 1;
-                item.code = INVALIDSYMBOL;
-            }
+            let num = 1usize << (maxlen - *len);
+            let start = table[index].code as usize;
+            let code = *code >> TABLE_BITS;
+            let len = *len - TABLE_BITS;
+            fill_table(&mut table[start..], num, code as usize, len, i as u16);
         }
     }
 
@@ -206,44 +184,35 @@ fn read_symbol(
     let idx = bits9 as usize;
     let code0 = &lookup_table[idx];
 
-    if code0.len <= FIRSTBITS {
+    if code0.len <= TABLE_BITS {
         *sptr += code0.len as usize;
         return Ok(code0.code);
     }
 
-    *sptr += FIRSTBITS as usize;
-    let count = code0.len - FIRSTBITS;
+    *sptr += TABLE_BITS as usize;
+    let count = code0.len - TABLE_BITS;
 
     let bits = show_bits(sptr, src, count as usize)?;
     let idx = code0.code as usize + bits as usize;
     let code = &lookup_table[idx];
 
-    *sptr += code.len as usize - FIRSTBITS as usize;
+    *sptr += code.len as usize;
     Ok(code.code)
 }
 
 // ----------------------------------------------------------------------------
 fn generate_fixed_luts() -> std::result::Result<(LookupTable, LookupTable), Error> {
     const NUM_DEFLATE_CODE_SYMBOLS: usize = 288;
-    let mut table_ll = [VarLenCode { code: 0, len: 8 }; NUM_DEFLATE_CODE_SYMBOLS];
-    table_ll[144..256].fill(VarLenCode { code: 0, len: 9 });
-    table_ll[256..280].fill(VarLenCode { code: 0, len: 7 });
-    let lut_ll = make_lookup_table(&mut table_ll)?;
+    let mut len_ll = [8; NUM_DEFLATE_CODE_SYMBOLS];
+    len_ll[144..256].fill(9);
+    len_ll[256..280].fill(7);
+    let lut_ll = make_lookup_table(&len_ll)?;
 
     const NUM_DISTANCE_SYMBOLS: usize = 32;
-    let mut table_d = [VarLenCode { code: 0, len: 5 }; NUM_DISTANCE_SYMBOLS];
-    let lut_d = make_lookup_table(&mut table_d)?;
+    let len_d = [5; NUM_DISTANCE_SYMBOLS];
+    let lut_d = make_lookup_table(&len_d)?;
 
     Ok((lut_ll, lut_d))
-}
-
-// ----------------------------------------------------------------------------
-fn generate_lut(bitlen: &[u8]) -> std::result::Result<LookupTable, Error> {
-    let mut table = Vec::with_capacity(bitlen.len());
-    for len in bitlen.iter() {
-        table.push(VarLenCode { code: 0, len: *len });
-    }
-    make_lookup_table(table.as_mut_slice())
 }
 
 // ----------------------------------------------------------------------------
@@ -260,16 +229,16 @@ fn read_encoded_luts(
     }
 
     const NUM_CODE_LENGTH_CODES: usize = 19;
-    let mut table_cl = [VarLenCode { code: 0, len: 0 }; NUM_CODE_LENGTH_CODES];
+    let mut len_cl = [0; NUM_CODE_LENGTH_CODES];
 
     const CODE_LEN_PERM: [u8; NUM_CODE_LENGTH_CODES] = [
         16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
     ];
     for cl in &CODE_LEN_PERM[..cl_len] {
-        table_cl[*cl as usize].len = read_bits(src, sptr, 3)? as u8;
+        len_cl[*cl as usize] = read_bits(src, sptr, 3)? as u8;
     }
 
-    let vlc_cl = make_lookup_table(&mut table_cl)?;
+    let vlc_cl = make_lookup_table(&len_cl)?;
 
     let count = ll_len + dt_len;
     const NUM_DEFLATE_CODE_SYMBOLS: usize = 288;
@@ -319,8 +288,8 @@ fn read_encoded_luts(
         return Err(Error::InvalidData);
     }
 
-    let lut_ll = generate_lut(&bitlen[0..ll_len])?;
-    let lut_d = generate_lut(&bitlen[ll_len..ll_len + dt_len])?;
+    let lut_ll = make_lookup_table(&bitlen[0..ll_len])?;
+    let lut_d = make_lookup_table(&bitlen[ll_len..ll_len + dt_len])?;
 
     Ok((lut_ll, lut_d))
 }
