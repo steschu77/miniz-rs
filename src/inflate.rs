@@ -6,7 +6,7 @@
 use super::Error;
 
 // ----------------------------------------------------------------------------
-fn show_bits(bp: &usize, src: &[u8], count: usize) -> std::result::Result<u16, Error> {
+fn show_bits(bp: &usize, src: &[u8], count: u8) -> std::result::Result<u16, Error> {
     let bytepos = *bp >> 3;
     let shift = *bp & 7;
     let mask = (1 << count) - 1;
@@ -28,9 +28,9 @@ fn show_bits(bp: &usize, src: &[u8], count: usize) -> std::result::Result<u16, E
 }
 
 // ----------------------------------------------------------------------------
-fn read_bits(src: &[u8], sptr: &mut usize, count: usize) -> std::result::Result<u16, Error> {
+fn read_bits(src: &[u8], sptr: &mut usize, count: u8) -> std::result::Result<u16, Error> {
     let res = show_bits(sptr, src, count)?;
-    *sptr += count;
+    *sptr += count as usize;
     Ok(res)
 }
 
@@ -101,9 +101,8 @@ fn generate_codes(codes: &mut [u16], lengths: &[u8]) -> std::result::Result<bool
 
 // ------------------------------------------------------------------------
 fn fill_table(table: &mut [VarLenCode], num: usize, offset: usize, len: u8, code: u16) {
-    for j in 0..num {
-        let index = offset + (j << len);
-        table[index] = VarLenCode { code, len };
+    for entry in table[offset..].iter_mut().step_by(1 << len).take(num) {
+        *entry = VarLenCode { code, len };
     }
 }
 
@@ -180,24 +179,24 @@ fn read_symbol(
     sptr: &mut usize,
     lookup_table: &LookupTable,
 ) -> std::result::Result<u16, Error> {
-    let bits9 = show_bits(sptr, src, 9)?;
-    let idx = bits9 as usize;
-    let code0 = &lookup_table[idx];
+    let idx = show_bits(sptr, src, TABLE_BITS)? as usize;
+    let code_0 = &lookup_table[idx];
 
-    if code0.len <= TABLE_BITS {
-        *sptr += code0.len as usize;
-        return Ok(code0.code);
+    if code_0.len <= TABLE_BITS {
+        // short symbol, fully in first table
+        *sptr += code_0.len as usize;
+        Ok(code_0.code)
+    } else {
+        // long symbol, needs second lookup, code_0.code points to start of second table
+        *sptr += TABLE_BITS as usize;
+        let count = code_0.len - TABLE_BITS;
+
+        let idx = show_bits(sptr, src, count)? as usize;
+        let code_1 = &lookup_table[code_0.code as usize + idx];
+
+        *sptr += code_1.len as usize;
+        Ok(code_1.code)
     }
-
-    *sptr += TABLE_BITS as usize;
-    let count = code0.len - TABLE_BITS;
-
-    let bits = show_bits(sptr, src, count as usize)?;
-    let idx = code0.code as usize + bits as usize;
-    let code = &lookup_table[idx];
-
-    *sptr += code.len as usize;
-    Ok(code.code)
 }
 
 // ----------------------------------------------------------------------------
