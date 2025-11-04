@@ -3,7 +3,34 @@
 // * based on the excellent LodePNG implementation by Lode Vandevenne:
 //   https://lodev.org/lodepng/
 
-use super::Error;
+// ----------------------------------------------------------------------------
+#[derive(Debug, PartialEq)]
+pub enum Error {
+    Underflow,
+    Overflow,
+    InvalidHeader,
+    InvalidBitstream,
+    InvalidBlockType,
+    InvalidBlockLength,
+    InvalidCodeLength,
+    InvalidDistance,
+    InvalidLength,
+    InvalidSymbol,
+    InvalidData,
+    UnderSubscribedTree,
+    OverSubscribedTree,
+}
+
+// ----------------------------------------------------------------------------
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let err = format!("{:?}", self);
+        f.write_str(&err)
+    }
+}
+
+// ----------------------------------------------------------------------------
+impl std::error::Error for Error {}
 
 // ----------------------------------------------------------------------------
 fn show_bits(bp: &usize, src: &[u8], count: u8) -> std::result::Result<u16, Error> {
