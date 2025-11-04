@@ -1,8 +1,7 @@
 // ----------------------------------------------------------------------------
 mod test {
 
-    use miniz::inflate::inflate;
-    use miniz::Error;
+    use miniz::inflate::{inflate, Error};
 
     #[test]
     fn test_coverage() {
