@@ -82,12 +82,12 @@ mod test {
         // invalid bit length repeat
         let inp = [0x04, 0x00, 0x24, 0x49, 0x00];
         let s7 = inflate(&mut out, &inp);
-        assert_eq!(s7.err(), Some(Error::InvalidData));
+        assert_eq!(s7.err(), Some(Error::InvalidFirstCopyCode));
 
         // invalid bit length repeat
         let inp = [0x04, 0x00, 0x24, 0xe9, 0xff, 0xff];
         let s8 = inflate(&mut out, &inp);
-        assert_eq!(s8.err(), Some(Error::InvalidData));
+        assert_eq!(s8.err(), Some(Error::InvalidCopyLength));
     }
 
     #[test]

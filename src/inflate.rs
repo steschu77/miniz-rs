@@ -13,10 +13,13 @@ pub enum Error {
     InvalidBlockType,
     InvalidBlockLength,
     InvalidCodeLength,
+    InvalidCopyLength,
     InvalidDistance,
     InvalidLength,
     InvalidSymbol,
     InvalidData,
+    InvalidFirstCopyCode,
+    MissingEndMarker,
     UnderSubscribedTree,
     OverSubscribedTree,
 }
@@ -74,7 +77,7 @@ fn reverse_bits(x: u16, count: usize) -> u16 {
 const TABLE_BITS: u8 = 9;
 
 // ----------------------------------------------------------------------------
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 struct VarLenCode {
     code: u16,
     len: u8,
@@ -281,11 +284,11 @@ fn read_encoded_luts(
             }
             16 => {
                 if ptr == 0 {
-                    return Err(Error::InvalidData);
+                    return Err(Error::InvalidFirstCopyCode);
                 }
                 let len = 3 + read_bits(src, sptr, 2)? as usize;
                 if ptr + len >= count {
-                    return Err(Error::InvalidData);
+                    return Err(Error::InvalidCopyLength);
                 }
                 let value = bitlen[ptr - 1];
                 bitlen[ptr..ptr + len].fill(value);
@@ -298,7 +301,7 @@ fn read_encoded_luts(
                     11 + read_bits(src, sptr, 7)?
                 } as usize;
                 if ptr + len >= count {
-                    return Err(Error::InvalidData);
+                    return Err(Error::InvalidCopyLength);
                 }
                 bitlen[ptr..ptr + len].fill(0);
                 ptr += len;
