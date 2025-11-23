@@ -96,12 +96,10 @@ fn generate_codes(codes: &mut [u16], lengths: &[u8]) -> std::result::Result<bool
         code_len_count[*len as usize] += 1;
     }
 
-    // calculate next code for each code length & monitor for over- or under-subscription
-    let mut next_code = [0; MAX_CODE_LENGTH];
+    // monitor for over- or under-subscription by tracking available_codes
     let mut available_codes: i32 = 1;
     for i in 1..MAX_CODE_LENGTH {
         available_codes = (available_codes << 1) - code_len_count[i] as i32;
-        next_code[i] = (next_code[i - 1] + code_len_count[i - 1]) << 1;
     }
 
     if available_codes != 0 {
@@ -117,12 +115,18 @@ fn generate_codes(codes: &mut [u16], lengths: &[u8]) -> std::result::Result<bool
         };
     }
 
+    // calculate next code for each code length
+    let mut next_code = [0u16; MAX_CODE_LENGTH];
+    for i in 1..MAX_CODE_LENGTH {
+        next_code[i] = next_code[i - 1].wrapping_add(code_len_count[i - 1]) << 1;
+    }
+
     for (len, code) in lengths.iter().zip(codes.iter_mut()) {
         if *len != 0 {
             let len = *len as usize;
             // Huffman bits are given in MSB first order but the bit reader reads LSB first
             *code = reverse_bits(next_code[len], len);
-            next_code[len] += 1;
+            next_code[len] = next_code[len].wrapping_add(1);
         }
     }
 
