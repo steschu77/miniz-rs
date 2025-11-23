@@ -287,7 +287,7 @@ fn read_encoded_luts(
                     return Err(Error::InvalidFirstCopyCode);
                 }
                 let len = 3 + read_bits(src, sptr, 2)? as usize;
-                if ptr + len >= count {
+                if ptr + len > count {
                     return Err(Error::InvalidCopyLength);
                 }
                 let value = bitlen[ptr - 1];
@@ -300,7 +300,7 @@ fn read_encoded_luts(
                 } else {
                     11 + read_bits(src, sptr, 7)?
                 } as usize;
-                if ptr + len >= count {
+                if ptr + len > count {
                     return Err(Error::InvalidCopyLength);
                 }
                 bitlen[ptr..ptr + len].fill(0);
