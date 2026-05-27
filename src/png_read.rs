@@ -257,7 +257,9 @@ fn decode_idat(
         return Err(Error::InvalidIDAT);
     }
 
-    let bpp = ihdr.color_type.channels() * ihdr.bit_depth;
+    let channels = ihdr.color_type.channels();
+    let bpc = ihdr.bit_depth;
+    let bpp = channels.checked_mul(bpc).ok_or(Error::InvalidPng)?;
     let bpl = ihdr.width.checked_mul(bpp).ok_or(Error::InvalidPng)?;
     let bpl = bpl.div_ceil(8) + 1;
     let size = ihdr.height.checked_mul(bpl).ok_or(Error::InvalidPng)?;
@@ -327,6 +329,7 @@ pub fn png_read(png: &[u8]) -> Result<(PNGChunkIHDR, Vec<u32>, Vec<u8>)> {
 
     png = &png[IHDR_LEN + 4..png.len()];
 
+    // Reject spec-invalid headers
     if ihdr.width == 0
         || ihdr.height == 0
         || ihdr.bit_depth == 0
@@ -337,8 +340,8 @@ pub fn png_read(png: &[u8]) -> Result<(PNGChunkIHDR, Vec<u32>, Vec<u8>)> {
         return Err(Error::InvalidFormat);
     }
 
+    // Adam7 interlace and bpp > 8 are not supported
     if ihdr.interlace != 0 || ihdr.bit_depth > 8 {
-        // Adam7 interlace is not supported
         return Err(Error::UnsupportedFormat);
     }
 

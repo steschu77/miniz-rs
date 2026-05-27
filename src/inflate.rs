@@ -98,8 +98,8 @@ fn generate_codes(codes: &mut [u16], lengths: &[u8]) -> std::result::Result<bool
 
     // monitor for over- or under-subscription by tracking available_codes
     let mut available_codes: i32 = 1;
-    for i in 1..MAX_CODE_LENGTH {
-        available_codes = (available_codes << 1) - code_len_count[i] as i32;
+    for count in code_len_count.iter().take(MAX_CODE_LENGTH).skip(1) {
+        available_codes = (available_codes << 1) - *count as i32;
     }
 
     if available_codes != 0 {
@@ -357,7 +357,7 @@ fn inflate_huffman_block(
         let code_ll = read_symbol(src, sptr, &trees.0)?;
         match code_ll {
             0..=255 => {
-                dst[*dptr] = code_ll as u8;
+                *dst.get_mut(*dptr).ok_or(Error::Overflow)? = code_ll as u8;
                 *dptr += 1;
             }
             256 => {
@@ -368,7 +368,7 @@ fn inflate_huffman_block(
                 let info_ll = CODE_INFO.get(idx).ok_or(Error::InvalidLength)?;
 
                 let start = *dptr;
-                let length = info_ll.1 as usize + read_bits(src, sptr, info_ll.0.into())? as usize;
+                let length = info_ll.1 as usize + read_bits(src, sptr, info_ll.0)? as usize;
 
                 let code_d = read_symbol(src, sptr, &trees.1)?;
                 if code_d == 0 {
@@ -382,8 +382,7 @@ fn inflate_huffman_block(
                     let idx = code_d as usize;
                     let info_d = DIST_INFO.get(idx).ok_or(Error::InvalidDistance)?;
 
-                    let distance =
-                        info_d.1 as usize + read_bits(src, sptr, info_d.0.into())? as usize;
+                    let distance = info_d.1 as usize + read_bits(src, sptr, info_d.0)? as usize;
 
                     if distance > start {
                         return Err(Error::InvalidDistance);

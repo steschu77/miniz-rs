@@ -12,6 +12,7 @@ pub enum Error {
     FileNotFound,
     CompressionError,
     BufferError,
+    UnexpectedEof,
 }
 
 // ----------------------------------------------------------------------------
@@ -85,7 +86,8 @@ fn read_cd(data: &[u8], total_entries: u16) -> Result<Vec<File>> {
 
         entries.push(File { name, offset });
 
-        data = &data[46 + name_len + extra_len + comment_len..];
+        let entry_len = 46 + name_len + extra_len + comment_len;
+        data = data.get(entry_len..).ok_or(Error::UnexpectedEof)?;
     }
 
     Ok(entries)
@@ -93,11 +95,10 @@ fn read_cd(data: &[u8], total_entries: u16) -> Result<Vec<File>> {
 
 // ----------------------------------------------------------------------------
 fn extract_file(data: &[u8], file: &File) -> Result<Vec<u8>> {
-    println!("{file:?}",);
     let ofs = file.offset;
     let hdr = &data[ofs..ofs + 30];
 
-    if !data.starts_with(&[0x50, 0x4b, 0x03, 0x04]) {
+    if !hdr.starts_with(&[0x50, 0x4b, 0x03, 0x04]) {
         return Err(Error::InvalidSignature);
     }
 
